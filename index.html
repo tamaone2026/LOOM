@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Screen Recorder</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fix-webm-duration@1.0.6/fix-webm-duration.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f0f13;
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+      gap: 20px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    header svg { flex-shrink: 0; }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    /* ─── Controls ─── */
+    #controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    button {
+      cursor: pointer;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 22px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    button:active { transform: scale(0.97); }
+    button:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
+
+    #btnStart {
+      background: #ef4444;
+      color: #fff;
+    }
+    #btnPause {
+      background: #f59e0b;
+      color: #fff;
+    }
+    #btnStop {
+      background: #374151;
+      color: #fff;
+    }
+
+    #timer {
+      font-size: 1.1rem;
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+      color: #ef4444;
+      min-width: 60px;
+      text-align: center;
+      display: none;
+    }
+    #timer.paused {
+      color: #f59e0b;
+    }
+
+    #recDot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #ef4444;
+      display: none;
+      animation: pulse 1s infinite;
+    }
+    #recDot.paused {
+      background: #f59e0b;
+      animation: none;
+      opacity: 1;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.2; }
+    }
+
+    /* ─── Status ─── */
+    #status {
+      font-size: 0.85rem;
+      color: #9ca3af;
+      text-align: center;
+    }
+
+    /* ─── Preview ─── */
+    #previewWrap {
+      width: 100%;
+      max-width: 960px;
+      background: #1a1a24;
+      border-radius: 14px;
+      overflow: hidden;
+      position: relative;
+      aspect-ratio: 16/9;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #previewCanvas {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    #placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      color: #4b5563;
+      font-size: 0.9rem;
+    }
+    #placeholder svg { opacity: 0.4; }
+
+    /* ─── Countdown ─── */
+    #countdown {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.55);
+      z-index: 10;
+    }
+    #countNum {
+      font-size: 10rem;
+      font-weight: 900;
+      color: #fff;
+      line-height: 1;
+      text-shadow: 0 4px 32px rgba(0,0,0,0.5);
+      animation: countPop 0.9s ease-out;
+    }
+    @keyframes countPop {
+      0%   { transform: scale(1.4); opacity: 0; }
+      20%  { transform: scale(1.0); opacity: 1; }
+      80%  { transform: scale(1.0); opacity: 1; }
+      100% { transform: scale(0.8); opacity: 0; }
+    }
+
+    /* ─── Annotation ─── */
+    #annotationCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 5;
+      pointer-events: none;
+      touch-action: none;
+    }
+    #annotationCanvas.active {
+      pointer-events: all;
+      cursor: crosshair;
+    }
+
+    #annotToolbar {
+      position: absolute;
+      bottom: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: none;
+      align-items: center;
+      gap: 8px;
+      background: rgba(15, 15, 25, 0.88);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 40px;
+      padding: 7px 14px;
+      z-index: 20;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    #annotToolbar.visible { display: flex; }
+
+    .annot-sep {
+      width: 1px; height: 20px;
+      background: rgba(255,255,255,0.18);
+      flex-shrink: 0;
+    }
+
+    .annot-color {
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.25);
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: transform 0.1s, border-color 0.1s;
+    }
+    .annot-color:hover { transform: scale(1.2); }
+    .annot-color.selected {
+      border-color: #fff;
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.55);
+    }
+
+    .annot-tool {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 20px;
+      padding: 4px 11px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+      white-space: nowrap;
+    }
+    .annot-tool:hover  { background: rgba(255,255,255,0.2); }
+    .annot-tool.active { background: rgba(239,68,68,0.75); border-color: #ef4444; }
+
+    #btnAnnot { background: #6d28d9; color: #fff; }
+    #btnAnnot.active { background: #7c3aed; }
+
+    /* ─── Info ─── */
+    #info {
+      font-size: 0.78rem;
+      color: #6b7280;
+      text-align: center;
+      line-height: 1.6;
+      max-width: 600px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+    <circle cx="16" cy="16" r="16" fill="#ef4444"/>
+    <circle cx="16" cy="16" r="7" fill="white"/>
+    <circle cx="16" cy="16" r="4" fill="#ef4444"/>
+  </svg>
+  <h1>Screen Recorder</h1>
+</header>
+
+<div id="controls">
+  <button id="btnStart">録画開始</button>
+  <div id="recDot"></div>
+  <div id="timer">00:00</div>
+  <button id="btnPause" disabled>一時停止</button>
+  <button id="btnStop" disabled>録画停止 &amp; 保存</button>
+  <button id="btnAnnot">✏️ 描画</button>
+</div>
+
+<div id="status">録画開始ボタンを押してください</div>
+
+<div id="previewWrap">
+  <canvas id="previewCanvas"></canvas>
+  <canvas id="annotationCanvas"></canvas>
+  <div id="annotToolbar">
+    <div class="annot-color selected" style="background:#ef4444" data-color="#ef4444" title="赤"></div>
+    <div class="annot-color" style="background:#f59e0b" data-color="#f59e0b" title="黄"></div>
+    <div class="annot-color" style="background:#22c55e" data-color="#22c55e" title="緑"></div>
+    <div class="annot-color" style="background:#3b82f6" data-color="#3b82f6" title="青"></div>
+    <div class="annot-color" style="background:#ffffff" data-color="#ffffff" title="白"></div>
+    <div class="annot-sep"></div>
+    <button class="annot-tool" id="btnAnnotEraser">消しゴム</button>
+    <button class="annot-tool" id="btnAnnotClear">クリア</button>
+  </div>
+  <div id="countdown" style="display:none"><span id="countNum"></span></div>
+  <div id="placeholder">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
+    </svg>
+    <span>プレビューがここに表示されます</span>
+  </div>
+</div>
+
+<div id="info">
+  macOSでシステム音声を録音するには、画面共有ダイアログで「コンピュータの音声を共有」を選択してください。<br>
+  出力形式：MP4（ブラウザ非対応の場合はWebM）
+</div>
+
+<!-- Hidden media elements -->
+<video id="screenVideo" autoplay muted playsinline style="display:none"></video>
+<video id="webcamVideo" autoplay muted playsinline style="display:none"></video>
+<canvas id="blurCanvas" style="display:none"></canvas>
+
+<script>
+// ─────────────────────────────────────────
+// State
+// ─────────────────────────────────────────
+const state = {
+  screenStream: null,
+  webcamStream: null,
+  recorder: null,
+  chunks: [],
+  startTime: null,
+  timerInterval: null,
+  drawIntervalId: null,
+  audioCtx: null,
+  audioDestination: null,
+  selfieSegmentation: null,
+  segmentedFrameReady: false,
+  segmentationBusy: false,
+  mimeType: '',
+  frameCount: 0,
+  hasWebcam: false,
+  isPaused: false,
+  pausedAt: null,
+  totalPausedMs: 0,
+};
+
+// ─────────────────────────────────────────
+// DOM refs
+// ─────────────────────────────────────────
+const previewCanvas = document.getElementById('previewCanvas');
+const blurCanvas    = document.getElementById('blurCanvas');
+const screenVideo   = document.getElementById('screenVideo');
+const webcamVideo   = document.getElementById('webcamVideo');
+const btnStart      = document.getElementById('btnStart');
+const btnPause      = document.getElementById('btnPause');
+const btnStop       = document.getElementById('btnStop');
+const statusEl      = document.getElementById('status');
+const timerEl       = document.getElementById('timer');
+const recDotEl      = document.getElementById('recDot');
+const placeholderEl = document.getElementById('placeholder');
+
+const ctx     = previewCanvas.getContext('2d');
+const blurCtx = blurCanvas.getContext('2d');
+
+// ─────────────────────────────────────────
+// Cursor tracking (screen-relative coords)
+// ─────────────────────────────────────────
+let cursorX = -9999, cursorY = -9999;
+
+document.addEventListener('mousemove', (e) => {
+  cursorX = e.screenX;
+  cursorY = e.screenY;
+});
+
+// Clear stale cursor when browser loses focus or mouse leaves window
+window.addEventListener('blur', () => { cursorX = -9999; cursorY = -9999; });
+document.addEventListener('mouseleave', () => { cursorX = -9999; cursorY = -9999; });
+
+// ─────────────────────────────────────────
+// MIME type detection
+// ─────────────────────────────────────────
+function detectMimeType() {
+  const candidates = [
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+    'video/mp4;codecs=avc1.42E01E',
+    'video/mp4',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm',
+  ];
+  for (const t of candidates) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return '';
+}
+
+// ─────────────────────────────────────────
+// MediaPipe Selfie Segmentation
+// ─────────────────────────────────────────
+function initSegmentation() {
+  return new Promise((resolve, reject) => {
+    try {
+      const seg = new SelfieSegmentation({
+        locateFile: (file) =>
+          `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`,
+      });
+
+      seg.setOptions({ modelSelection: 0, selfieMode: false });  // model 0 = faster
+
+      seg.onResults((results) => {
+        state.segmentationBusy = false;  // release lock
+        const W = webcamVideo.videoWidth  || 320;
+        const H = webcamVideo.videoHeight || 240;
+
+        if (blurCanvas.width !== W || blurCanvas.height !== H) {
+          blurCanvas.width  = W;
+          blurCanvas.height = H;
+        }
+
+        blurCtx.save();
+        blurCtx.clearRect(0, 0, W, H);
+
+        // Draw segmentation mask (white = person)
+        blurCtx.drawImage(results.segmentationMask, 0, 0, W, H);
+
+        // source-out: draw blurred background where mask is transparent
+        blurCtx.globalCompositeOperation = 'source-out';
+        blurCtx.filter = 'blur(18px)';
+        blurCtx.drawImage(results.image, 0, 0, W, H);
+        blurCtx.filter = 'none';
+
+        // destination-atop: draw sharp person on top
+        blurCtx.globalCompositeOperation = 'destination-atop';
+        blurCtx.drawImage(results.image, 0, 0, W, H);
+
+        blurCtx.restore();
+        state.segmentedFrameReady = true;
+      });
+
+      seg.initialize().then(() => {
+        state.selfieSegmentation = seg;
+        resolve();
+      }).catch(reject);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// ─────────────────────────────────────────
+// Audio mixing
+// ─────────────────────────────────────────
+function mixAudio(screenStream, webcamStream) {
+  state.audioCtx = new AudioContext({ sampleRate: 48000 });
+  state.audioDestination = state.audioCtx.createMediaStreamDestination();
+
+  const addTrack = (stream, gainVal) => {
+    const tracks = stream ? stream.getAudioTracks() : [];
+    if (tracks.length === 0) return;
+    const src  = state.audioCtx.createMediaStreamSource(new MediaStream(tracks));
+    const gain = state.audioCtx.createGain();
+    gain.gain.value = gainVal;
+    src.connect(gain);
+    gain.connect(state.audioDestination);
+  };
+
+  addTrack(screenStream, 1.0);  // system audio
+  addTrack(webcamStream, 1.0);  // microphone
+
+  return state.audioDestination.stream;
+}
+
+// ─────────────────────────────────────────
+// Canvas compositing loop
+// ─────────────────────────────────────────
+function drawFrame() {
+  const W = previewCanvas.width;
+  const H = previewCanvas.height;
+
+  // Layer 1: Screen capture
+  if (screenVideo.readyState >= 2) {
+    ctx.drawImage(screenVideo, 0, 0, W, H);
+  } else {
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Cursor highlight
+  // screenX/Y are in logical (CSS) pixels; canvas W/H may be physical (Retina).
+  // Dividing by screen.width * dpr converts logical cursor → physical canvas coords.
+  const dpr = window.devicePixelRatio || 1;
+  const pxRaw = cursorX * (W / (window.screen.width  * dpr));
+  const pyRaw = cursorY * (H / (window.screen.height * dpr));
+  if (pxRaw >= 0 && pxRaw <= W && pyRaw >= 0 && pyRaw <= H) {
+    // Outer ring
+    ctx.beginPath();
+    ctx.arc(pxRaw, pyRaw, 22, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255, 220, 0, 0.85)';
+    ctx.lineWidth   = 3;
+    ctx.stroke();
+    // Inner filled dot
+    ctx.beginPath();
+    ctx.arc(pxRaw, pyRaw, 5, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 220, 0, 0.7)';
+    ctx.fill();
+  }
+
+  // Layer 1.5: Annotation overlay (drawn on top of screen, under webcam)
+  if (annotCanvas.width > 0 && annotCanvas.height > 0) {
+    ctx.drawImage(annotCanvas, 0, 0, W, H);
+  }
+
+  // Layer 2: Webcam circle (bottom-right)
+  if (state.hasWebcam) {
+    const RADIUS = Math.round(Math.min(W, H) * 0.12);  // 12% of shorter side
+    const MARGIN = Math.round(RADIUS * 0.24);
+    const cx = W - MARGIN - RADIUS;
+    const cy = H - MARGIN - RADIUS;
+
+    const source = state.segmentedFrameReady ? blurCanvas : webcamVideo;
+    const sw = source === blurCanvas ? blurCanvas.width  : webcamVideo.videoWidth;
+    const sh = source === blurCanvas ? blurCanvas.height : webcamVideo.videoHeight;
+
+    if (sw > 0 && sh > 0) {
+      const D = RADIUS * 2;
+      const scale = Math.max(D / sw, D / sh);
+      const cropW = D / scale;
+      const cropH = D / scale;
+      const sx = (sw - cropW) / 2;
+      const sy = (sh - cropH) / 2;
+
+      // Shadow
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.5)';
+      ctx.shadowBlur  = 20;
+      ctx.beginPath();
+      ctx.arc(cx, cy, RADIUS + 2, 0, Math.PI * 2);
+      ctx.fillStyle = 'transparent';
+      ctx.fill();
+      ctx.restore();
+
+      // Clip to circle (with horizontal mirror)
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, RADIUS, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.translate(cx, cy);
+      ctx.scale(-1, 1);  // mirror horizontally
+      ctx.drawImage(source, sx, sy, cropW, cropH, -RADIUS, -RADIUS, D, D);
+      ctx.restore();
+
+      // White border ring
+      ctx.beginPath();
+      ctx.arc(cx, cy, RADIUS, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.lineWidth   = 3;
+      ctx.stroke();
+    }
+
+    // Feed frame to MediaPipe (skip if previous frame still processing)
+    if (!state.segmentationBusy && webcamVideo.readyState >= 2) {
+      state.segmentationBusy = true;
+      state.selfieSegmentation?.send({ image: webcamVideo }).catch(() => {
+        state.segmentationBusy = false;
+      });
+    }
+  }
+
+}
+
+// ─────────────────────────────────────────
+// Annotation
+// ─────────────────────────────────────────
+const annotCanvas  = document.getElementById('annotationCanvas');
+const annotCtx     = annotCanvas.getContext('2d');
+const annotToolbar = document.getElementById('annotToolbar');
+const btnAnnot     = document.getElementById('btnAnnot');
+
+const annot = {
+  active:    false,
+  drawing:   false,
+  color:     '#ef4444',
+  lineWidth: 5,
+  mode:      'pen',   // 'pen' | 'eraser'
+};
+
+function syncAnnotCanvasSize() {
+  annotCanvas.width  = previewCanvas.width  || 1920;
+  annotCanvas.height = previewCanvas.height || 1080;
+}
+
+function toggleAnnotation() {
+  annot.active = !annot.active;
+  btnAnnot.classList.toggle('active', annot.active);
+  annotCanvas.classList.toggle('active', annot.active);
+  annotToolbar.classList.toggle('visible', annot.active);
+  // When turning on, reset to pen mode
+  if (annot.active) {
+    annot.mode = 'pen';
+    document.getElementById('btnAnnotEraser').classList.remove('active');
+  }
+}
+
+btnAnnot.addEventListener('click', toggleAnnotation);
+
+// Color picker
+document.querySelectorAll('.annot-color').forEach(el => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('.annot-color').forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+    annot.color = el.dataset.color;
+    annot.mode  = 'pen';
+    document.getElementById('btnAnnotEraser').classList.remove('active');
+  });
+});
+
+// Eraser toggle
+document.getElementById('btnAnnotEraser').addEventListener('click', function() {
+  annot.mode = annot.mode === 'eraser' ? 'pen' : 'eraser';
+  this.classList.toggle('active', annot.mode === 'eraser');
+});
+
+// Clear all
+document.getElementById('btnAnnotClear').addEventListener('click', () => {
+  annotCtx.clearRect(0, 0, annotCanvas.width, annotCanvas.height);
+});
+
+// Convert clientX/Y to annotation canvas pixel coords
+function getAnnotCoords(e) {
+  const rect   = annotCanvas.getBoundingClientRect();
+  const scaleX = annotCanvas.width  / rect.width;
+  const scaleY = annotCanvas.height / rect.height;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top)  * scaleY,
+  };
+}
+
+// Scaled line width relative to 1920px wide canvas
+function scaledLineWidth() {
+  return annot.lineWidth * (annotCanvas.width / 1920);
+}
+
+annotCanvas.addEventListener('mousedown', (e) => {
+  if (!annot.active) return;
+  annot.drawing = true;
+  const { x, y } = getAnnotCoords(e);
+  annotCtx.beginPath();
+  annotCtx.moveTo(x, y);
+  e.preventDefault();
+});
+
+annotCanvas.addEventListener('mousemove', (e) => {
+  if (!annot.active || !annot.drawing) return;
+  const { x, y } = getAnnotCoords(e);
+  if (annot.mode === 'eraser') {
+    const r = scaledLineWidth() * 5;
+    annotCtx.clearRect(x - r, y - r, r * 2, r * 2);
+  } else {
+    annotCtx.lineTo(x, y);
+    annotCtx.strokeStyle = annot.color;
+    annotCtx.lineWidth   = scaledLineWidth();
+    annotCtx.lineCap     = 'round';
+    annotCtx.lineJoin    = 'round';
+    annotCtx.stroke();
+  }
+  e.preventDefault();
+});
+
+annotCanvas.addEventListener('mouseup',    () => { annot.drawing = false; });
+annotCanvas.addEventListener('mouseleave', () => { annot.drawing = false; });
+
+// Touch support
+annotCanvas.addEventListener('touchstart', (e) => {
+  if (!annot.active) return;
+  const touch = e.touches[0];
+  annot.drawing = true;
+  const { x, y } = getAnnotCoords(touch);
+  annotCtx.beginPath();
+  annotCtx.moveTo(x, y);
+  e.preventDefault();
+}, { passive: false });
+
+annotCanvas.addEventListener('touchmove', (e) => {
+  if (!annot.active || !annot.drawing) return;
+  const touch = e.touches[0];
+  const { x, y } = getAnnotCoords(touch);
+  if (annot.mode === 'eraser') {
+    const r = scaledLineWidth() * 5;
+    annotCtx.clearRect(x - r, y - r, r * 2, r * 2);
+  } else {
+    annotCtx.lineTo(x, y);
+    annotCtx.strokeStyle = annot.color;
+    annotCtx.lineWidth   = scaledLineWidth();
+    annotCtx.lineCap     = 'round';
+    annotCtx.lineJoin    = 'round';
+    annotCtx.stroke();
+  }
+  e.preventDefault();
+}, { passive: false });
+
+annotCanvas.addEventListener('touchend', () => { annot.drawing = false; });
+
+// ─────────────────────────────────────────
+// Timer
+// ─────────────────────────────────────────
+function startTimer() {
+  state.startTime    = Date.now();
+  state.totalPausedMs = 0;
+  timerEl.style.display  = 'block';
+  recDotEl.style.display = 'block';
+
+  state.timerInterval = setInterval(() => {
+    if (state.isPaused) return;
+    const elapsed = Math.floor((Date.now() - state.startTime - state.totalPausedMs) / 1000);
+    const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+    const s = String(elapsed % 60).padStart(2, '0');
+    timerEl.textContent = `${m}:${s}`;
+  }, 500);
+}
+
+function stopTimer() {
+  clearInterval(state.timerInterval);
+  timerEl.style.display  = 'none';
+  recDotEl.style.display = 'none';
+  timerEl.classList.remove('paused');
+  recDotEl.classList.remove('paused');
+}
+
+// ─────────────────────────────────────────
+// Countdown
+// ─────────────────────────────────────────
+function runCountdown() {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('countdown');
+    const numEl   = document.getElementById('countNum');
+    let count = 3;
+
+    overlay.style.display = 'flex';
+
+    function tick() {
+      numEl.textContent = count;
+      numEl.style.animation = 'none';
+      numEl.offsetHeight; // force reflow to restart animation
+      numEl.style.animation = '';
+
+      count--;
+      if (count < 0) {
+        overlay.style.display = 'none';
+        resolve();
+        return;
+      }
+      setTimeout(tick, 1000);
+    }
+    tick();
+  });
+}
+
+// ─────────────────────────────────────────
+// Pause / Resume
+// ─────────────────────────────────────────
+function togglePause() {
+  if (!state.recorder) return;
+
+  if (!state.isPaused) {
+    // → pause
+    state.recorder.pause();
+    clearInterval(state.drawIntervalId);
+    state.isPaused = true;
+    state.pausedAt = Date.now();
+    btnPause.textContent = '再開';
+    timerEl.classList.add('paused');
+    recDotEl.classList.add('paused');
+    setStatus('一時停止中');
+  } else {
+    // → resume
+    state.recorder.resume();
+    state.drawIntervalId = setInterval(drawFrame, 1000 / 30);
+    state.totalPausedMs += Date.now() - state.pausedAt;
+    state.isPaused = false;
+    state.pausedAt = null;
+    btnPause.textContent = '一時停止';
+    timerEl.classList.remove('paused');
+    recDotEl.classList.remove('paused');
+    setStatus('録画中');
+  }
+}
+
+btnPause.addEventListener('click', togglePause);
+
+// ─────────────────────────────────────────
+// Start recording
+// ─────────────────────────────────────────
+btnStart.addEventListener('click', async () => {
+  btnStart.disabled = true;
+  setStatus('画面選択中...');
+
+  try {
+    // 1. Screen capture
+    state.screenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 30, max: 30 }, cursor: 'always' },
+      audio: { systemAudio: 'include', suppressLocalAudioPlayback: true },
+    });
+
+    // 2. Webcam (optional)
+    state.hasWebcam = false;
+    try {
+      state.webcamStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } },
+        audio: true,
+      });
+      state.hasWebcam = true;
+    } catch (camErr) {
+      setStatus('カメラなしで録画します（画面のみ）');
+      // Create mic-only stream if possible
+      try {
+        state.webcamStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch (_) {
+        state.webcamStream = null;
+      }
+    }
+
+    // 3. Attach streams to video elements
+    screenVideo.srcObject = state.screenStream;
+    await screenVideo.play().catch(() => {});
+
+    if (state.hasWebcam) {
+      webcamVideo.srcObject = state.webcamStream;
+      await webcamVideo.play().catch(() => {});
+    }
+
+    // 4. Init MediaPipe (only if webcam available)
+    if (state.hasWebcam) {
+      setStatus('AIモデルを読み込み中...');
+      try {
+        await initSegmentation();
+      } catch (mpErr) {
+        console.warn('MediaPipe init failed, using raw webcam:', mpErr);
+        // Will use raw webcam video without blur
+      }
+    }
+
+    // 5. Size canvas to screen resolution
+    const screenTrack = state.screenStream.getVideoTracks()[0];
+    const settings = screenTrack.getSettings();
+    previewCanvas.width  = settings.width  || 1920;
+    previewCanvas.height = settings.height || 1080;
+    syncAnnotCanvasSize();  // match annotation canvas to recording resolution
+
+    // 6. Audio mixing
+    const mixedAudio = mixAudio(state.screenStream, state.webcamStream);
+
+    // 7. Build recording stream
+    const canvasStream = previewCanvas.captureStream(30);
+    mixedAudio.getAudioTracks().forEach(t => canvasStream.addTrack(t));
+
+    // 8. MediaRecorder
+    state.mimeType = detectMimeType();
+    state.chunks   = [];
+
+    let recorder;
+    try {
+      recorder = new MediaRecorder(canvasStream, {
+        mimeType: state.mimeType,
+        videoBitsPerSecond: 4_000_000,
+        audioBitsPerSecond: 128_000,
+      });
+    } catch {
+      recorder = new MediaRecorder(canvasStream);
+      state.mimeType = recorder.mimeType;
+    }
+
+    recorder.ondataavailable = (e) => {
+      if (e.data?.size > 0) state.chunks.push(e.data);
+    };
+
+    recorder.onstop = handleRecordingStop;
+    state.recorder  = recorder;
+
+    // 9. Handle screen share stop (user clicks browser's "Stop sharing")
+    state.screenStream.getVideoTracks()[0].addEventListener('ended', () => {
+      if (state.recorder?.state === 'recording') stopRecording();
+    });
+
+    // 10. Countdown → Start
+    setStatus('まもなく録画開始...');
+    await runCountdown();
+    recorder.start(1000);
+    state.drawIntervalId = setInterval(drawFrame, 1000 / 30);  // 30fps, runs even in background tab
+    startTimer();
+
+    placeholderEl.style.display = 'none';
+    btnStart.disabled = true;
+    btnPause.disabled = false;
+    btnStop.disabled  = false;
+
+    const hasSystemAudio = state.screenStream.getAudioTracks().length > 0;
+    setStatus(state.hasWebcam
+      ? `録画中 ${hasSystemAudio ? '（システム音声+マイク）' : '（マイクのみ）'}`
+      : `録画中 ${hasSystemAudio ? '（システム音声）' : '（音声なし）'}`
+    );
+
+  } catch (err) {
+    console.error(err);
+    if (err.name === 'NotAllowedError') {
+      setStatus('画面共有が拒否されました');
+    } else {
+      setStatus(`エラー: ${err.message}`);
+    }
+    btnStart.disabled = false;
+  }
+});
+
+// ─────────────────────────────────────────
+// Stop recording
+// ─────────────────────────────────────────
+btnStop.addEventListener('click', stopRecording);
+
+function stopRecording() {
+  if (state.recorder?.state === 'recording') {
+    state.recorder.stop();
+  }
+
+  clearInterval(state.drawIntervalId);
+  stopTimer();
+
+  state.selfieSegmentation?.close?.();
+  state.selfieSegmentation = null;
+  state.segmentedFrameReady = false;
+
+  state.audioCtx?.close().catch(() => {});
+
+  [state.screenStream, state.webcamStream].forEach(s =>
+    s?.getTracks().forEach(t => t.stop())
+  );
+
+  btnStop.disabled  = true;
+  btnPause.disabled = true;
+  btnPause.textContent = '一時停止';
+  btnStart.disabled = false;
+  state.isPaused    = false;
+
+  // Reset annotation mode
+  if (annot.active) toggleAnnotation();
+  annotCtx.clearRect(0, 0, annotCanvas.width, annotCanvas.height);
+
+  setStatus('処理中...');
+}
+
+// ─────────────────────────────────────────
+// Handle recording stop → download
+// ─────────────────────────────────────────
+async function handleRecordingStop() {
+  const duration = Date.now() - state.startTime;
+  const rawBlob  = new Blob(state.chunks, { type: state.mimeType || 'video/webm' });
+  const isWebm   = !state.mimeType.startsWith('video/mp4');
+  const ext      = isWebm ? 'webm' : 'mp4';
+
+  let finalBlob = rawBlob;
+
+  if (isWebm && typeof ysFixWebmDuration === 'function') {
+    try {
+      finalBlob = await new Promise((resolve) => {
+        ysFixWebmDuration(rawBlob, duration, resolve, { logger: false });
+      });
+    } catch (e) {
+      console.warn('fix-webm-duration failed:', e);
+      finalBlob = rawBlob;
+    }
+  }
+
+  const filename = `recording-${formatDateForFilename(new Date())}.${ext}`;
+  const url = URL.createObjectURL(finalBlob);
+  const a   = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 15_000);
+
+  const mb = (finalBlob.size / 1024 / 1024).toFixed(1);
+  setStatus(`保存完了：${filename}（${mb} MB）`);
+
+  // Reset preview
+  ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+  placeholderEl.style.display = 'flex';
+}
+
+// ─────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────
+function setStatus(msg) {
+  statusEl.textContent = msg;
+}
+
+function formatDateForFilename(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join('');
+}
+</script>
+</body>
+</html>
