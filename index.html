@@ -378,20 +378,6 @@ const ctx     = previewCanvas.getContext('2d');
 const blurCtx = blurCanvas.getContext('2d');
 
 // ─────────────────────────────────────────
-// Cursor tracking (screen-relative coords)
-// ─────────────────────────────────────────
-let cursorX = -9999, cursorY = -9999;
-
-document.addEventListener('mousemove', (e) => {
-  cursorX = e.screenX;
-  cursorY = e.screenY;
-});
-
-// Clear stale cursor when browser loses focus or mouse leaves window
-window.addEventListener('blur', () => { cursorX = -9999; cursorY = -9999; });
-document.addEventListener('mouseleave', () => { cursorX = -9999; cursorY = -9999; });
-
-// ─────────────────────────────────────────
 // MIME type detection
 // ─────────────────────────────────────────
 function detectMimeType() {
@@ -498,33 +484,6 @@ function drawFrame() {
   } else {
     ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, W, H);
-  }
-
-  // Cursor highlight
-  // screenX/Y are in logical (CSS) pixels; canvas W/H may be physical (Retina).
-  // Dividing by screen.width * dpr converts logical cursor → physical canvas coords.
-  const dpr = window.devicePixelRatio || 1;
-  const pxRaw = cursorX * (W / (window.screen.width  * dpr));
-  const pyRaw = cursorY * (H / (window.screen.height * dpr));
-  if (pxRaw >= 0 && pxRaw <= W && pyRaw >= 0 && pyRaw <= H) {
-    const s = W / 1920;
-    // Faint outer halo
-    ctx.beginPath();
-    ctx.arc(pxRaw, pyRaw, 38 * s, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255, 220, 0, 0.25)';
-    ctx.lineWidth   = 1.5 * s;
-    ctx.stroke();
-    // Main ring
-    ctx.beginPath();
-    ctx.arc(pxRaw, pyRaw, 26 * s, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255, 220, 0, 0.9)';
-    ctx.lineWidth   = 3 * s;
-    ctx.stroke();
-    // Center dot
-    ctx.beginPath();
-    ctx.arc(pxRaw, pyRaw, 5 * s, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 220, 0, 0.85)';
-    ctx.fill();
   }
 
   // Layer 1.5: Annotation overlay (drawn on top of screen, under webcam)
