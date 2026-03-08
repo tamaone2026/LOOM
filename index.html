@@ -89,6 +89,32 @@
       display: none;
       animation: pulse 1s infinite;
     }
+    /* ─── Ripple indicator ─── */
+    #rippleIndicator {
+      display: none;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: #4b5563;
+      padding: 4px 11px;
+      border-radius: 20px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+      transition: color 0.2s, border-color 0.2s;
+      white-space: nowrap;
+    }
+    #rippleIndicator.recording { display: flex; }
+    #rippleIndicator.focused {
+      color: #ef4444;
+      border-color: rgba(239,68,68,0.35);
+    }
+    #rippleIndicator .ri-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
     #recDot.paused {
       background: #f59e0b;
       animation: none;
@@ -297,6 +323,10 @@
   <button id="btnPause" disabled>一時停止</button>
   <button id="btnStop" disabled>録画停止 &amp; 保存</button>
   <button id="btnAnnot">✏️ 描画</button>
+  <div id="rippleIndicator" title="このタブにフォーカスがある間のみクリックを自動検出。Fキーで手動発動可">
+    <span class="ri-dot"></span>
+    <span id="rippleLabel">波紋</span>
+  </div>
 </div>
 
 <div id="status">録画開始ボタンを押してください</div>
@@ -324,7 +354,8 @@
 
 <div id="info">
   macOSでシステム音声を録音するには、画面共有ダイアログで「コンピュータの音声を共有」を選択してください。<br>
-  出力形式：MP4（ブラウザ非対応の場合はWebM）
+  出力形式：MP4（ブラウザ非対応の場合はWebM）<br>
+  <strong style="color:#ef4444">クリック波紋：</strong>このタブにフォーカスがある間は自動検出。他のウィンドウ操作中はブラウザ制限で検出不可。<strong>Fキー</strong>を押すと最後のカーソル位置に手動で波紋を発動できます。
 </div>
 
 <button id="drawFsClose">✕ 全画面を閉じる</button>
@@ -383,14 +414,20 @@ const blurCtx = blurCanvas.getContext('2d');
 // ─────────────────────────────────────────
 let cursorX = -9999, cursorY = -9999;
 
+// lastRipple persists across focus changes (used by F-key manual ripple)
+let lastRippleX = -9999, lastRippleY = -9999;
+
 document.addEventListener('mousemove', (e) => {
   cursorX = e.screenX;
   cursorY = e.screenY;
+  lastRippleX = e.screenX;
+  lastRippleY = e.screenY;
 });
 
 // Clear stale cursor when browser loses focus or mouse leaves window
-window.addEventListener('blur', () => { cursorX = -9999; cursorY = -9999; });
+window.addEventListener('blur', () => { cursorX = -9999; cursorY = -9999; updateRippleIndicator(); });
 document.addEventListener('mouseleave', () => { cursorX = -9999; cursorY = -9999; });
+window.addEventListener('focus', () => updateRippleIndicator());
 
 // Click ripple (skip while annotating to avoid ripple on every pen stroke)
 document.addEventListener('mousedown', (e) => {
@@ -983,6 +1020,7 @@ btnStart.addEventListener('click', async () => {
     btnStart.disabled = true;
     btnPause.disabled = false;
     btnStop.disabled  = false;
+    updateRippleIndicator();
 
     const hasSystemAudio = state.screenStream.getAudioTracks().length > 0;
     setStatus(state.hasWebcam
@@ -1029,6 +1067,7 @@ function stopRecording() {
   btnPause.textContent = '一時停止';
   btnStart.disabled = false;
   state.isPaused    = false;
+  updateRippleIndicator();
 
   // Reset annotation mode
   if (annot.active) toggleAnnotation();
@@ -1081,6 +1120,44 @@ async function handleRecordingStop() {
 function setStatus(msg) {
   statusEl.textContent = msg;
 }
+
+// ─────────────────────────────────────────
+// Ripple indicator + F-key manual trigger
+// ─────────────────────────────────────────
+const rippleIndicatorEl = document.getElementById('rippleIndicator');
+const rippleLabelEl     = document.getElementById('rippleLabel');
+
+function updateRippleIndicator() {
+  const isRec = state.recorder && ['recording', 'paused'].includes(state.recorder.state);
+  if (!isRec) {
+    rippleIndicatorEl.classList.remove('recording', 'focused');
+    return;
+  }
+  rippleIndicatorEl.classList.add('recording');
+  if (document.hasFocus()) {
+    rippleIndicatorEl.classList.add('focused');
+    rippleLabelEl.textContent = '波紋 ON（Fキー）';
+  } else {
+    rippleIndicatorEl.classList.remove('focused');
+    rippleLabelEl.textContent = '波紋 要フォーカス';
+  }
+}
+
+// F key: manual ripple at last known cursor position
+document.addEventListener('keydown', (e) => {
+  if ((e.key !== 'f' && e.key !== 'F') || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (!state.recorder || !['recording', 'paused'].includes(state.recorder.state)) return;
+  if (annot.active) return;
+  if (lastRippleX < 0 || lastRippleY < 0) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W   = previewCanvas.width;
+  const H   = previewCanvas.height;
+  const px  = lastRippleX * (W / (window.screen.width  * dpr));
+  const py  = lastRippleY * (H / (window.screen.height * dpr));
+  if (px >= 0 && px <= W && py >= 0 && py <= H) {
+    state.ripples.push({ x: px, y: py, startTime: Date.now() });
+  }
+});
 
 function formatDateForFilename(date) {
   const pad = (n) => String(n).padStart(2, '0');
