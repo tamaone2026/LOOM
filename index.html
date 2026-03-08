@@ -1007,7 +1007,7 @@ btnStart.addEventListener('click', async () => {
 btnStop.addEventListener('click', stopRecording);
 
 function stopRecording() {
-  if (state.recorder?.state === 'recording') {
+  if (['recording', 'paused'].includes(state.recorder?.state)) {
     state.recorder.stop();
   }
 
