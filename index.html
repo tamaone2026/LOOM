@@ -6,6 +6,8 @@
   <title>Screen Recorder</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/fix-webm-duration@1.0.6/fix-webm-duration.js"></script>
+  <!-- ffmpeg.wasm: MP4 faststart remux for Notion compatibility -->
+  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js" crossorigin="anonymous"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -971,6 +973,33 @@ function stopRecording() {
 // ─────────────────────────────────────────
 // Handle recording stop → download
 // ─────────────────────────────────────────
+// ffmpeg インスタンス（初回ロード後は再利用）
+let _ffmpeg = null;
+
+async function remuxMp4Faststart(blob) {
+  // @ffmpeg/ffmpeg UMD が window.FFmpegWASM or window.FFmpeg に展開される
+  const FFmpegLib = window.FFmpegWASM || window.FFmpeg;
+  if (!FFmpegLib) throw new Error('ffmpeg.js not loaded');
+
+  if (!_ffmpeg) {
+    setStatus('FFmpegをロード中... (初回のみ約10MB)');
+    _ffmpeg = new FFmpegLib.FFmpeg();
+    const base = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+    await _ffmpeg.load({
+      coreURL:  base + '/ffmpeg-core.js',
+      wasmURL:  base + '/ffmpeg-core.wasm',
+    });
+  }
+
+  setStatus('Notion向けに最適化中...');
+  await _ffmpeg.writeFile('in.mp4', new Uint8Array(await blob.arrayBuffer()));
+  await _ffmpeg.exec(['-i', 'in.mp4', '-c', 'copy', '-movflags', '+faststart', 'out.mp4']);
+  const data = await _ffmpeg.readFile('out.mp4');
+  await _ffmpeg.deleteFile('in.mp4');
+  await _ffmpeg.deleteFile('out.mp4');
+  return new Blob([data], { type: 'video/mp4' });
+}
+
 async function handleRecordingStop() {
   const duration = Date.now() - state.startTime;
   const rawBlob  = new Blob(state.chunks, { type: state.mimeType || 'video/webm' });
@@ -980,12 +1009,21 @@ async function handleRecordingStop() {
   let finalBlob = rawBlob;
 
   if (isWebm && typeof ysFixWebmDuration === 'function') {
+    // WebM: 再生時間メタデータを修正
     try {
       finalBlob = await new Promise((resolve) => {
         ysFixWebmDuration(rawBlob, duration, resolve, { logger: false });
       });
     } catch (e) {
       console.warn('fix-webm-duration failed:', e);
+      finalBlob = rawBlob;
+    }
+  } else if (!isWebm) {
+    // MP4: moov ヘッダーをファイル先頭に移動（Notion・各種プレイヤー対応）
+    try {
+      finalBlob = await remuxMp4Faststart(rawBlob);
+    } catch (e) {
+      console.warn('MP4 remux failed, saving original:', e);
       finalBlob = rawBlob;
     }
   }
